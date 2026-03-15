@@ -1,0 +1,5 @@
+# Priorityly uses only the Python standard library.
+# tkinter is bundled with the standard CPython distribution.
+# No third-party packages required.
+#
+# Python >= 3.9 recommended.
