@@ -18,6 +18,9 @@ from typing import Dict, Optional
 from .models import Task, QUADRANT_COLORS, QUADRANT_NAMES
 from .storage import Storage
 from .priority import ComparisonEngine, sorted_flat, sorted_by_priority
+from .config import AppConfig
+from .cache import LocalCache
+from .firebird_sync import FirebirdSync
 
 
 # ======================================================================
@@ -649,7 +652,19 @@ class AboutTab(ttk.Frame):
             "  Q3  Urgente + No Importante → Delegar\n"
             "  Q4  No Urgente + No Import  → Eliminar / Ignorar\n\n"
             "Los datos se guardan automáticamente en:\n"
-            "  ~/.priorityly/tasks.json"
+            "  ~/.priorityly/tasks.json       (guardado inmediato)\n"
+            "  ~/.priorityly/local-cache.json (caché periódico)\n\n"
+            "ALMACENAMIENTO LOCAL (local-cache)\n\n"
+            "  La aplicación guarda una instantánea completa de tus tareas\n"
+            "  en local-cache.json de forma automática cada cierto tiempo\n"
+            "  (por defecto: 30 s).  Al abrir el programa se restaura desde\n"
+            "  este archivo, por lo que no se pierde información al cerrar.\n\n"
+            "  El intervalo y las opciones de Firebird se configuran en:\n"
+            "  ~/.priorityly/config.json\n\n"
+            "RÉPLICA EN FIREBIRDQL\n\n"
+            "  Cuando la opción 'firebird.enabled' está activa en config.json,\n"
+            "  cada ciclo de auto-guardado replica automáticamente el\n"
+            "  local-cache a la base de datos Firebird configurada."
         )
 
         text = tk.Text(self, font=FONT_NORMAL, wrap="word",
@@ -675,12 +690,28 @@ class App(tk.Tk):
         self.minsize(800, 560)
         self.configure(bg=BG)
 
+        # Configuration (loaded from ~/.priorityly/config.json)
+        self._app_config = AppConfig.load()
+
+        # Persistent storage layers
         self.storage = Storage()
-        self.tasks: Dict[str, Task] = self.storage.load()
+        self._local_cache = LocalCache()
+        self._firebird_sync = FirebirdSync(self._app_config.firebird)
+
+        # Load tasks: prefer local-cache (authoritative periodic snapshot),
+        # fall back to the immediate-save tasks.json for backward compat.
+        cached = self._local_cache.load()
+        self.tasks: Dict[str, Task] = cached if cached else self.storage.load()
+
+        self._sync_after_id: Optional[int] = None
 
         self._setup_style()
         self._build_layout()
         self.save_and_refresh()
+
+        # Start the periodic auto-sync timer and register close handler.
+        self._schedule_auto_sync()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------------------------------------------------------------- #
     def _setup_style(self):
@@ -729,6 +760,33 @@ class App(tk.Tk):
         self._list_tab.refresh()
         if refresh_compare:
             self._compare_tab.refresh()
+
+    # ---------------------------------------------------------------- #
+    # Auto-sync (local-cache + Firebird)
+    # ---------------------------------------------------------------- #
+    def _schedule_auto_sync(self):
+        """Schedule the next periodic auto-sync using Tkinter's after()."""
+        interval_ms = self._app_config.cache_interval_seconds * 1000
+        self._sync_after_id = self.after(interval_ms, self._run_auto_sync)
+
+    def _run_auto_sync(self):
+        """Flush the local-cache and sync to Firebird, then reschedule."""
+        self._flush_cache()
+        self._schedule_auto_sync()
+
+    def _flush_cache(self):
+        """Write the current task list to local-cache.json and Firebird."""
+        self._local_cache.save(self.tasks)
+        self._firebird_sync.sync(self.tasks)
+
+    # ---------------------------------------------------------------- #
+    def _on_close(self):
+        """Perform a final cache flush before closing the window."""
+        if self._sync_after_id is not None:
+            self.after_cancel(self._sync_after_id)
+            self._sync_after_id = None
+        self._flush_cache()
+        self.destroy()
 
 
 def run():

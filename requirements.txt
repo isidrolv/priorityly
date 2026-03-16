@@ -1,5 +1,13 @@
-# Priorityly uses only the Python standard library.
+# Priorityly uses only the Python standard library for the core GUI.
 # tkinter is bundled with the standard CPython distribution.
-# No third-party packages required.
 #
 # Python >= 3.9 recommended.
+#
+# Optional: FirebirdSQL synchronisation (local-cache → Firebird replica).
+# Install when you want to enable the Firebird sync feature:
+#
+#   pip install firebird-driver
+#
+# The application works without this package; Firebird sync is simply
+# disabled when the driver is not found.
+firebird-driver>=1.10.0
